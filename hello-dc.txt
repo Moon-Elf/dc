@@ -1,0 +1,626 @@
+RPC/RMI
+
+server.py
+import socket
+import pickle
+
+def add(a, b):
+    return a + b
+
+def subtract(a, b):
+    return a - b
+
+def handle_request(request):
+    func_name = request['function']
+    params = request['params']
+    if func_name == 'add':
+        return add(*params)
+    elif func_name == 'subtract':
+        return subtract(*params)
+    else:
+        return f"Function {func_name} not found"
+
+if __name__ == '__main__':
+    host = '0.0.0.0'
+    port = 8080
+    totalclients = 1
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind((host, port))
+    sock.listen(totalclients)
+    print('Waiting for clients to connect...')
+    conn, addr = sock.accept()
+    print('Connected with client at', addr)
+    while True:
+        data = conn.recv(1024)
+        if not data:
+            break
+        request = pickle.loads(data)  # Deserialize the request
+        print(f"Received RPC request: {request}")
+        
+        response = handle_request(request)
+        conn.send(pickle.dumps(response))  # Serialize the response
+    conn.close()
+    sock.close()
+
+
+client.py
+import socket
+import pickle
+
+def call_rpc(function, params):
+    request = {'function': function, 'params': params}
+    sock.sendall(pickle.dumps(request))  # Serialize and send the request
+
+    response = sock.recv(1024)
+    result = pickle.loads(response)  # Deserialize the response
+    return result
+
+if __name__ == '__main__':
+    host = '172.10.10.104'
+    port = 8080
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.connect((host, port))
+
+    while True:
+        function = input('Enter function name (add/subtract): ')
+        params = input('Enter parameters as comma separated values (e.g., 3,4): ')
+        params = tuple(map(int, params.split(',')))
+
+        result = call_rpc(function, params)
+        print(f'Response: {result}')
+
+    sock.close()
+
+
+
+
+
+
+------------------------------------------------------------
+Interprocess Communication (IPC)
+import logging
+import os
+import time
+from multiprocessing import Process, Array
+
+def process1(shared):
+    process1_logger = logging.getLogger('process1')
+    process1_logger.info(f"Pid:{os.getpid()}")
+
+    for i in range(1,11):
+        while True:
+            try:
+                process1_logger.info(f"Writing {int(i)}")
+                shared[i-1] = i
+                if i % 6 == 0:
+                    process1_logger.info("Intentionally sleeping for 5 seconds")
+                    time.sleep(5)
+                break
+            except Exception as e:
+                print(str(e))
+                pass
+
+    process1_logger.info("Finished process 1")
+
+def process2(shared):
+    process2_logger = logging.getLogger('process2')
+    process2_logger.info(f"Pid:{os.getpid()}")
+
+    for i in range(10):
+        while True:
+            try:
+                line = shared[i]
+                if line == -1:
+                    process2_logger.info("Data not available sleeping for 1 second before retrying")
+                    time.sleep(1)
+                    raise Exception('pending')
+                process2_logger.info(f"Read: {int(line)}")
+                break
+            except Exception:
+                pass
+
+    process2_logger.info("Finished process 2")
+
+def main():
+    parent_logger = logging.getLogger('parent')
+    parent_logger.info(f"Pid:{os.getpid()}")
+
+    arr = Array('i', [-1] * 10)
+
+    procs = [Process(target=process1, args=(arr,)), Process(target=process2, args=(arr,))]
+
+    for proc in procs:
+        proc.start()
+
+    for proc in procs:
+        proc.join()
+
+logging.basicConfig(level=logging.INFO)
+ 
+if __name__ == '__main__':
+    main()
+
+-----------------------------------------------------------
+Group Communication
+
+server.py
+import socket, threading
+
+HOST, PORT = '192.168.29.106', 5000
+clients = []
+
+def handle_client(client, addr):
+    print(f"[NEW] {addr} connected.")
+    while True:
+        try:
+            msg = client.recv(1024).decode()
+            if not msg: break
+            print(f"[{addr}] {msg}")
+            broadcast(f"[{addr}] {msg}", client)
+        except: break
+    clients.remove(client)
+    client.close()
+
+def broadcast(msg, sender):
+    for c in clients:
+        if c != sender:
+            try: c.send(msg.encode())
+            except: clients.remove(c)
+
+server = socket.socket()
+server.bind((HOST, PORT))
+server.listen()
+print(f"Server running on {HOST}:{PORT}")
+
+while True:
+    client, addr = server.accept()
+    clients.append(client)
+    threading.Thread(target=handle_client, args=(client, addr)).start()
+
+
+client.py
+import socket, threading
+
+HOST, PORT = '192.168.29.106', 5000
+
+def receive(client):
+    while True:
+        try: print(client.recv(1024).decode())
+        except: break
+
+client = socket.socket()
+try:
+    client.connect((HOST, PORT))
+    print("Connected.")
+    threading.Thread(target=receive, args=(client,)).start()
+    while True: client.send(input().encode())
+except: print("Failed to connect."
+
+-----------------------------------------------------------
+Election Algorithm
+
+
+total_processes = 5
+processes = [{'id': i, 'active': True} for i in range(total_processes)]
+
+print("No of processes", total_processes)
+
+failed_process = 3
+processes[failed_process]['active'] = False
+print(f"Process no {failed_process} fails")
+
+initiator = 2
+print(f"Election Initiated by {initiator}")
+
+old = initiator
+new = (old + 1) % total_processes
+
+while True:
+    if processes[new]['active']:
+        print(f"Process {old} pass Election({old}) to {new}")
+        old = new
+    new = (new + 1) % total_processes
+    if new == initiator:
+        break
+
+coordinator = max((i for i in range(total_processes) if processes[i]['active']), key=lambda i: processes[i]['id'])
+print(f"Process {coordinator} becomes coordinator")
+
+old = coordinator
+new = (old + 1) % total_processes
+
+while True:
+    if processes[new]['active']:
+        print(f"Process {old} pass Coordinator({coordinator}) message to process {new}")
+        old = new
+    new = (new + 1) % total_processes
+    if new == coordinator:
+        print("End Of Election")
+        break
+
+-----------------------------------------------------------
+Clock Synchronization
+(Berkely's Algorithm)
+
+
+from datetime import datetime, timedelta
+
+def berkeley_algorithm(nodes):
+    # Calculate the average time (converted to timestamps)
+    average_time = sum(node['time'].timestamp() for node in nodes) / len(nodes)
+    # Calculate the time difference for each node
+    for node in nodes:
+        node['offset'] = average_time - node['time'].timestamp()
+        node['synchronized_time'] = node['time'] + timedelta(seconds=node['offset'])
+
+def synchronize_clocks(nodes):
+    for node in nodes:
+        # Synchronize the clock for each node
+        node['synchronized_time'] = node['time'] + timedelta(seconds=node['offset'])
+
+def print_node_times(nodes):
+    for node in nodes:
+        print(f"Node {node['id']} - Local Time: {node['time']}, Synchronized Time: {node.get('synchronized_time', 'Not synchronized')}")
+
+if __name__ == "__main__":
+    # Example with three nodes
+    nodes = [
+        {'id': 1, 'time': datetime.now()},
+        {'id': 2, 'time': datetime.now() + timedelta(seconds=5)},
+        {'id': 3, 'time': datetime.now() - timedelta(seconds=3)}
+    ]
+    print("Original Node Times:")
+    print_node_times(nodes)
+    berkeley_algorithm(nodes)
+    synchronize_clocks(nodes)
+    print("\nAfter Berkeley Algorithm:")
+    print_node_times(nodes)
+
+-----------------------------------------------------------
+Token Based Algorithm
+
+
+from queue import Queue
+
+PR = 5
+token_holder = 0
+
+class Token:
+    def __init__(self):
+        self.id = 0  
+        self.token_q = Queue()
+        self.ln = [0] * PR
+
+    def update_ln(self, pid, seqno):
+        self.ln[pid] = seqno
+
+token = Token()
+
+class Site:
+    def __init__(self, pid):
+        self.pid = pid
+        self.rn = [0] * PR
+        self.has_token = False
+        self.requesting = False
+        self.executing = False
+
+    def request_cs(self):
+        global token_holder
+        
+        if self.executing or self.requesting:
+            print(f"Process {self.pid} is already in CS or has requested.")
+            return
+        
+        self.requesting = True
+        self.rn[self.pid] += 1
+        seqno = self.rn[self.pid]
+        
+        if token_holder == self.pid:
+            print(f"Process {self.pid} already has the token, entering CS.")
+            self.enter_cs()
+            return
+        
+        print(f"Process {self.pid} requested CS with seq {seqno}")
+        for i in range(PR):
+            if i != self.pid:
+                sites[i].receive_request(self.pid, seqno)
+        
+        if token_holder == self.pid:
+            self.enter_cs()
+        else:
+            print(f"Process {self.pid} is waiting for the token.")
+
+    def receive_request(self, requester_id, seqno):
+        self.rn[requester_id] = max(self.rn[requester_id], seqno)
+        if self.has_token and not self.executing and token.ln[requester_id] + 1 == self.rn[requester_id]:
+            self.send_token(requester_id)
+        elif self.has_token and token.ln[requester_id] + 1 == self.rn[requester_id]:
+            token.token_q.put(requester_id)
+
+    def enter_cs(self):
+        self.executing = True
+        self.has_token = True
+        self.requesting = False
+        print(f"Process {self.pid} enters CS.")
+
+    def release_cs(self):
+        global token_holder
+        if not self.executing:
+            print(f"Process {self.pid} is not executing CS.")
+            return
+        
+        print(f"Process {self.pid} releases CS.")
+        self.executing = False
+        token.update_ln(self.pid, self.rn[self.pid])
+        
+        if not token.token_q.empty():
+            next_process = token.token_q.get()
+            self.send_token(next_process)
+        else:
+            print(f"Process {self.pid} keeps the token.")
+
+    def send_token(self, next_pid):
+        global token_holder
+        print(f"Process {self.pid} sends token to Process {next_pid}.")
+        self.has_token = False
+        token_holder = next_pid
+        sites[next_pid].has_token = True
+        sites[next_pid].enter_cs()
+
+sites = [Site(i) for i in range(PR)]
+sites[0].has_token = True
+
+sites[0].request_cs()
+sites[1].request_cs()
+sites[2].request_cs()
+sites[0].release_cs()
+sites[0].request_cs()
+sites[3].request_cs()
+sites[1].release_cs()
+sites[2].release_cs()
+sites[0].release_cs()
+sites[3].release_cs()
+
+-----------------------------------------------------------
+Non Token Based Algorithm
+(Ricart Agrawal Algorithm)
+
+
+ns = int(input("Enter number of sites: "))
+ncs = int(input("Enter number of sites which want to enter critical section: "))
+ts = [0] * ns
+request = []
+mp = {}
+for _ in range(ncs):
+    timestamp = int(input("\nEnter timestamp: "))
+    site = int(input("Enter site number: "))
+    ts[site - 1] = timestamp
+    request.append(site)
+    mp[timestamp] = site
+print("\nSites and Timestamp:")
+for i in range(len(ts)):
+    print(f"{i + 1} {ts[i]}")
+
+for site in request:
+    print(f"\nRequest from site: {site}")
+    for j in range(len(ts)):
+        if site != (j + 1):
+            if ts[j] > ts[site - 1] or ts[j] == 0:
+                print(f"{j + 1} Replied")
+            else:
+                print(f"{j + 1} Deferred")
+print("\n")
+c = 0
+for timestamp, site in sorted(mp.items()):
+    print(f"Site {site} entered Critical Section")
+    if c == 0:
+        print("\nSimilarly,\n")
+    c += 1
+
+
+-----------------------------------------------------------
+Mutual Exclusion Algorithm
+(Lamport's Algorithm)
+import threading
+import time
+
+shared_resource = 0
+lock = threading.Lock()
+
+def modify_resource(thread_name):
+    global shared_resource
+    print(f"{thread_name} is trying to access the shared resource.")
+    
+    with lock:
+        print(f"{thread_name} has acquired the lock.")
+        current_value = shared_resource
+        time.sleep(1)
+        shared_resource = current_value + 1
+        print(f"{thread_name} updated the shared resource to {shared_resource}.")
+    
+    print(f"{thread_name} released the lock.")
+
+threads = []
+for i in range(5):
+    thread_name = f"Thread-{i+1}"
+    thread = threading.Thread(target=modify_resource, args=(thread_name,))
+    threads.append(thread)
+    thread.start()
+
+for thread in threads:
+    thread.join()
+
+print(f"Final value of shared_resource: {shared_resource}")
+
+-----------------------------------------------------------
+Load Balancing Algorithm
+(Round Robin)
+class RoundRobinLoadBalancer:
+    def __init__(self, numServers):
+        self.numServers = numServers
+        self.servers = [[] for _ in range(numServers)]
+
+    def addProcesses(self, processes):
+        currentIndex = 0
+        for process in processes:
+            self.servers[currentIndex].append(process)
+            currentIndex = (currentIndex + 1) % self.numServers  # Round robin distribution
+
+    def printProcesses(self):
+        for i, server in enumerate(self.servers):
+            print(f"Server {i + 1} Processes: {server}")
+
+def main():
+    # Initial processes in the servers
+    initialProcesses = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    # Number of servers
+    numServers = 4
+    loadBalancer = RoundRobinLoadBalancer(numServers)
+    print("Processes before balancing:")
+    print(*initialProcesses)
+    loadBalancer.addProcesses(initialProcesses)
+    print("\nProcesses after balancing:")
+    loadBalancer.printProcesses()
+
+if __name__ == "__main__":
+    main()
+
+-----------------------------------------------------------
+Distributed File System (DFS)
+
+
+server.py
+
+import socket
+import threading
+import os
+
+HOST = '0.0.0.0'
+PORT = 5000
+FILE_STORAGE = "server_files"
+
+os.makedirs(FILE_STORAGE, exist_ok=True)
+
+def handle_client(client_socket):
+    while True:
+        try:
+            request = client_socket.recv(1024).decode()
+            if not request:
+                break
+
+            command, *args = request.split()
+
+            if command == "UPLOAD":
+                filename = args[0]
+                filesize = int(args[1])
+                file_path = os.path.join(FILE_STORAGE, filename)
+
+                with open(file_path, "wb") as f:
+                    received = 0
+                    while received < filesize:
+                        data = client_socket.recv(1024)
+                        if not data:
+                            break
+                        f.write(data)
+                        received += len(data)
+
+                client_socket.send(b"UPLOAD_SUCCESS")
+
+            elif command == "DOWNLOAD":
+                filename = args[0]
+                file_path = os.path.join(FILE_STORAGE, filename)
+
+                if os.path.exists(file_path):
+                    filesize = os.path.getsize(file_path)
+                    client_socket.send(f"SIZE {filesize}".encode())
+
+                    with open(file_path, "rb") as f:
+                        while chunk := f.read(1024):
+                            client_socket.send(chunk)
+                else:
+                    client_socket.send(b"ERROR_FILE_NOT_FOUND")
+
+            elif command == "LIST":
+                files = os.listdir(FILE_STORAGE)
+                client_socket.send(" ".join(files).encode())
+
+            elif command == "EXIT":
+                break
+
+        except Exception as e:
+            print(f"Error: {e}")
+            break
+
+    client_socket.close()
+
+def start_server():
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind((HOST, PORT))
+    server.listen(5)
+    print(f"Server started on {HOST}:{PORT}")
+
+    while True:
+        client_socket, addr = server.accept()
+        print(f"New connection from {addr}")
+        client_handler = threading.Thread(target=handle_client, args=(client_socket,))
+        client_handler.start()
+if __name__ == "__main__":
+    start_server()
+
+
+client.py
+
+
+
+import socket
+import os
+
+SERVER_HOST = '127.0.0.1'
+SERVER_PORT = 5000
+
+def send_command(command):
+    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    client.connect((SERVER_HOST, SERVER_PORT))
+    client.send(command.encode())
+
+    if command.startswith("UPLOAD"):
+        filename = command.split()[1]
+        filesize = os.path.getsize(filename)
+        client.send(f"{filesize}".encode())
+
+        with open(filename, "rb") as f:
+            while chunk := f.read(1024):
+                client.send(chunk)
+
+        response = client.recv(1024).decode()
+        print(response)
+
+    elif command.startswith("DOWNLOAD"):
+        response = client.recv(1024).decode()
+        if response.startswith("SIZE"):
+            filesize = int(response.split()[1])
+            filename = command.split()[1]
+
+            with open(filename, "wb") as f:
+                received = 0
+                while received < filesize:
+                    data = client.recv(1024)
+                    f.write(data)
+                    received += len(data)
+
+            print(f"{filename} downloaded successfully.")
+        else:
+            print("File not found on server.")
+
+    elif command.startswith("LIST"):
+        response = client.recv(1024).decode()
+        print("Server Files:", response)
+
+    client.close()
+
+if __name__ == "__main__":
+    while True:
+        cmd = input("Enter command (UPLOAD filename / DOWNLOAD filename / LIST / EXIT): ")
+        if cmd == "EXIT":
+            break
+        send_command(cmd)
